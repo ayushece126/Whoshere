@@ -1,12 +1,16 @@
 package cmd
 
 import (
-	"fmt"
+	"context"
 	"os"
 
 	"github.com/ramonvermeulen/whosthere/internal/config"
+	"github.com/ramonvermeulen/whosthere/internal/logging"
+	"github.com/ramonvermeulen/whosthere/internal/oui"
 	"github.com/ramonvermeulen/whosthere/internal/ui"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -18,15 +22,18 @@ Discover, explore, and understand your Local Area Network in an intuitive way.
 Knock Knock... who's there? 🚪`
 )
 
-var rootCmd = &cobra.Command{
-	Use:   appName,
-	Short: shortAppDesc,
-	Long:  longAppDesc,
-	CompletionOptions: cobra.CompletionOptions{
-		DisableDefaultCmd: true,
-	},
-	RunE: run,
-}
+var (
+	rootCmd = &cobra.Command{
+		Use:   appName,
+		Short: shortAppDesc,
+		Long:  longAppDesc,
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
+		RunE: run,
+	}
+	whosthereFlags = config.NewFlags()
+)
 
 func init() {
 	initWhosthereFlags()
@@ -41,14 +48,30 @@ func Execute() {
 }
 
 func run(*cobra.Command, []string) error {
-	fmt.Println("Welcome to whosthere!")
+	ctx := context.Background()
 
-	app := ui.NewApp()
-	if err := app.Init(); err != nil {
+	level := logging.LevelFromEnv(zapcore.InfoLevel)
+	logger, logPath, err := logging.Init(appName, level, false)
+	if err != nil {
+		return err
+	} else {
+		logger.Info("logger initialized", zap.String("path", logPath), zap.String("level", level.String()))
+	}
+
+	cfg, err := config.Load(whosthereFlags.ConfigFile)
+	if err != nil {
+		zap.L().Error("failed to load or create config", zap.Error(err))
 		return err
 	}
 
+	ouiDB, err := oui.Init(ctx)
+	if err != nil {
+		zap.L().Warn("failed to initialize OUI database; manufacturer lookups will be disabled", zap.Error(err))
+	}
+
+	app := ui.NewApp(cfg, ouiDB)
 	if err := app.Run(); err != nil {
+		zap.L().Error("ui run failed", zap.Error(err))
 		return err
 	}
 
@@ -56,12 +79,10 @@ func run(*cobra.Command, []string) error {
 }
 
 func initWhosthereFlags() {
-	whosthereFlags := config.NewFlags()
-	rootCmd.Flags().IntVarP(
-		whosthereFlags.ScanRate,
-		"scan-rate", "s",
-		config.DefaultScanRate,
-		"Specify the default scan rate as integer in seconds.",
+	rootCmd.Flags().StringVarP(
+		&whosthereFlags.ConfigFile,
+		"config-file", "c",
+		"",
+		"Path to config file.",
 	)
-	rootCmd.Flags()
 }
