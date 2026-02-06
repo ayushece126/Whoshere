@@ -12,6 +12,7 @@ import (
 
 	"github.com/ramonvermeulen/whosthere/internal/discovery"
 	"github.com/ramonvermeulen/whosthere/internal/discovery/arp"
+	"github.com/ramonvermeulen/whosthere/internal/discovery/mdns"
 	"github.com/ramonvermeulen/whosthere/internal/discovery/ssdp"
 	"github.com/ramonvermeulen/whosthere/internal/logging"
 	"github.com/ramonvermeulen/whosthere/internal/oui"
@@ -29,6 +30,7 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scannerNames, _ := cmd.Flags().GetString("scanner")
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
+		scanDuration := time.Duration(timeoutSec) * time.Second
 
 		level := logging.LevelFromEnv(zapcore.InfoLevel)
 		_, _, err := logging.Init("whosthere-scan", level, true)
@@ -45,17 +47,20 @@ Examples:
 		}
 
 		var scList []discovery.Scanner
+		sweeper := arp.NewSweeper(5*time.Minute, time.Minute)
 		requested := strings.Split(scannerNames, ",")
 		for _, r := range requested {
 			r = strings.TrimSpace(strings.ToLower(r))
 			switch r {
 			case "", "all":
 				// add all
-				scList = append(scList, &ssdp.Scanner{}, &arp.Scanner{})
+				scList = append(scList, &ssdp.Scanner{}, arp.NewScanner(sweeper), &mdns.Scanner{})
 			case "ssdp":
 				scList = append(scList, &ssdp.Scanner{})
 			case "arp":
-				scList = append(scList, &arp.Scanner{})
+				scList = append(scList, arp.NewScanner(sweeper))
+			case "mdns":
+				scList = append(scList, &mdns.Scanner{})
 			default:
 				return fmt.Errorf("unknown scanner: %s", r)
 			}
@@ -65,9 +70,9 @@ Examples:
 			return fmt.Errorf("no scanners selected")
 		}
 
-		eng := discovery.NewEngine(scList, discovery.WithTimeout(time.Duration(timeoutSec)*time.Second), discovery.WithOUIRegistry(ouiDB))
+		eng := discovery.NewEngine(scList, discovery.WithTimeout(scanDuration), discovery.WithOUIRegistry(ouiDB))
 
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, scanDuration)
 		defer cancel()
 
 		devices, err := eng.Stream(ctx, func(d discovery.Device) {
@@ -80,7 +85,7 @@ Examples:
 		for _, d := range devices {
 			zap.L().Info("device",
 				zap.String("ip", d.IP.String()),
-				zap.String("hostname", d.Hostname),
+				zap.String("hostname", d.DisplayName),
 				zap.String("mac", d.MAC),
 				zap.String("manufacturer", d.Manufacturer),
 			)

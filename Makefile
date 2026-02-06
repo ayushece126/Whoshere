@@ -1,7 +1,7 @@
 default: fmt lint install test
 
 build:
-	go build
+	go build .
 
 install: build
 	go install -v ./...
@@ -13,7 +13,6 @@ fmt:
 	gofmt -s -w -e .
 
 test:
-	go test -v -cover -timeout=120s -parallel=10 ./...
-
+	go test -v -cover -race -timeout=120s -parallel=10 ./...
 
 .PHONY: fmt lint test build install
