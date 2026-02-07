@@ -1,11 +1,12 @@
 package pages
 
 import (
-	"github.com/derailed/tcell/v2"
-	"github.com/derailed/tview"
+	"github.com/gdamore/tcell/v2"
 	"github.com/ramonvermeulen/whosthere/internal/state"
 	"github.com/ramonvermeulen/whosthere/internal/ui/components"
 	"github.com/ramonvermeulen/whosthere/internal/ui/navigation"
+	"github.com/ramonvermeulen/whosthere/internal/ui/theme"
+	"github.com/rivo/tview"
 )
 
 var _ navigation.Page = &DashboardPage{}
@@ -19,42 +20,37 @@ type DashboardPage struct {
 
 	navigate func(route string)
 
-	filterView *tview.TextView
-	statusRow  tview.Primitive
-	helpText   *tview.TextView
+	header    *components.Header
+	filterBar *components.FilterBar
+	statusBar *components.StatusBar
+	version   string
 }
 
-func NewDashboardPage(s *state.AppState, navigate func(route string)) *DashboardPage {
+func NewDashboardPage(s *state.AppState, navigate func(route string), version string) *DashboardPage {
 	t := components.NewDeviceTable()
-	spinner := components.NewSpinner()
-	spinner.SetSuffix(" Scanning...")
+	statusBar := components.NewStatusBar()
+	statusBar.Spinner().SetSuffix(" Scanning...")
+	statusBar.SetHelp("j/k: up/down - g/G: top/bottom - Enter: details - t: theme")
 
 	main := tview.NewFlex().SetDirection(tview.FlexRow)
-	main.AddItem(
-		tview.NewTextView().
-			SetText("whosthere").
-			SetTextAlign(tview.AlignCenter),
-		0, 1, false,
-	)
-	main.AddItem(t, 0, 18, true)
+	theme.RegisterPrimitive(main) // Register main flex
 
-	filterView := tview.NewTextView().SetTextAlign(tview.AlignLeft)
-	status := tview.NewFlex().SetDirection(tview.FlexColumn)
-	helpText := tview.NewTextView().
-		SetText("j/k: up/down - g/G: top/bottom - Enter: details").
-		SetTextAlign(tview.AlignRight)
-	status.AddItem(spinner.View(), 0, 1, false)
-	status.AddItem(helpText, 0, 2, false)
+	header := components.NewHeader(version)
+	main.AddItem(header, 1, 0, false)
+	main.AddItem(t, 0, 1, true)
+
+	filterBar := components.NewFilterBar()
 
 	dp := &DashboardPage{
 		Flex:        main,
 		deviceTable: t,
-		spinner:     spinner,
+		spinner:     statusBar.Spinner(),
 		state:       s,
 		navigate:    navigate,
-		filterView:  filterView,
-		statusRow:   status,
-		helpText:    helpText,
+		header:      header,
+		filterBar:   filterBar,
+		statusBar:   statusBar,
+		version:     version,
 	}
 	dp.updateFooter(false)
 
@@ -92,22 +88,25 @@ func (p *DashboardPage) Refresh() {
 }
 
 func (p *DashboardPage) updateFooter(showFilter bool) {
-	if p.Flex == nil || p.statusRow == nil || p.filterView == nil {
+	if p.Flex == nil || p.statusBar == nil || p.filterBar == nil {
 		return
 	}
-	p.RemoveItem(p.filterView)
-	p.RemoveItem(p.statusRow)
+	p.RemoveItem(p.filterBar)
+	p.RemoveItem(p.statusBar.Primitive())
 	if showFilter {
-		p.AddItem(p.filterView, 1, 0, false)
+		p.AddItem(p.filterBar, 1, 0, false)
 	}
-	p.AddItem(p.statusRow, 1, 0, false)
+	p.AddItem(p.statusBar.Primitive(), 1, 0, false)
 }
 
-// handleSearchStatus updates footer visibility and help text based on table search state.
+// handleSearchStatus updates footer visibility and filter bar based on table search state.
 func (p *DashboardPage) handleSearchStatus(status components.SearchStatus) {
-	if p.filterView != nil {
-		p.filterView.SetTextColor(status.Color)
-		p.filterView.SetText(status.Text)
+	if p.filterBar != nil {
+		if status.Showing {
+			p.filterBar.Show(status.Text, status.Color)
+		} else {
+			p.filterBar.Clear()
+		}
 	}
 	p.updateFooter(status.Showing)
 }

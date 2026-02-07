@@ -59,10 +59,7 @@ func ensureConfigFile(path string, defaults *Config) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(defaults)
-	if err != nil {
-		return fmt.Errorf("serialize defaults: %w", err)
-	}
+	data := renderDefaultConfigFile(defaults)
 
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write default config: %w", err)
@@ -95,4 +92,70 @@ func validateAndNormalize(cfg *Config) error {
 	}
 
 	return cfg.validateAndNormalize()
+}
+
+func renderDefaultConfigFile(cfg *Config) []byte {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+
+	themeCfg := cfg.Theme
+
+	return []byte(fmt.Sprintf(`scan_interval: %s
+scan_duration: %s
+splash:
+  enabled: %t
+  delay: %s
+theme:
+  # pick a built-in theme by name; unknown names fall back to "default"
+  name: %s
+  # default palette (uncomment and set name: custom to tweak)
+  # primitive_background_color: "#000a1a"
+  # contrast_background_color: "#001a33"
+  # more_contrast_background_color: "#003366"
+  # border_color: "#0088ff"
+  # title_color: "#00ffff"
+  # graphics_color: "#00ffaa"
+  # primary_text_color: "#cceeff"
+  # secondary_text_color: "#6699ff"
+  # tertiary_text_color: "#ffaa00"
+  # inverse_text_color: "#000a1a"
+  # contrast_secondary_text_color: "#88ddff"
+scanners:
+  mdns:
+    enabled: %t
+  ssdp:
+    enabled: %t
+  arp:
+    enabled: %t
+`,
+		cfg.ScanInterval,
+		cfg.ScanDuration,
+		cfg.Splash.Enabled,
+		cfg.Splash.Delay,
+		themeCfg.Name,
+		cfg.Scanners.MDNS.Enabled,
+		cfg.Scanners.SSDP.Enabled,
+		cfg.Scanners.ARP.Enabled,
+	))
+}
+
+// Save writes the config to the specified path (or resolves the default path if empty).
+func Save(cfg *Config, pathOverride string) error {
+	if cfg == nil {
+		return ErrConfigNil
+	}
+
+	resolvedPath, err := resolveConfigPath(pathOverride)
+	if err != nil {
+		return fmt.Errorf("resolve config path: %w", err)
+	}
+
+	data := renderDefaultConfigFile(cfg)
+
+	if err := os.WriteFile(resolvedPath, data, 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	return nil
 }
