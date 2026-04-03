@@ -4,9 +4,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/ramonvermeulen/whosthere/internal/config"
-	"github.com/ramonvermeulen/whosthere/internal/logging"
-	"github.com/ramonvermeulen/whosthere/internal/oui"
+	"github.com/ramonvermeulen/whosthere/internal/core/config"
+	"github.com/ramonvermeulen/whosthere/internal/core/logging"
+	"github.com/ramonvermeulen/whosthere/internal/core/oui"
 	"github.com/ramonvermeulen/whosthere/internal/ui"
 	"github.com/ramonvermeulen/whosthere/internal/version"
 	"github.com/spf13/cobra"
@@ -34,20 +34,11 @@ var (
 		RunE: run,
 	}
 
-	versionCmd = &cobra.Command{
-		Use:   "version",
-		Short: "Print the version and exit",
-		Run: func(cmd *cobra.Command, args []string) {
-			version.Fprint(cmd.OutOrStdout())
-		},
-	}
-
-	whosthereFlags = config.NewFlags()
+	whosthereFlags = &config.Flags{}
 )
 
 func init() {
 	initWhosthereFlags()
-	rootCmd.AddCommand(versionCmd)
 }
 
 // Execute is the entrypoint for the CLI application
@@ -62,7 +53,7 @@ func run(*cobra.Command, []string) error {
 	ctx := context.Background()
 
 	level := logging.LevelFromEnv(zapcore.InfoLevel)
-	logger, logPath, err := logging.Init(appName, level, false)
+	logger, logPath, err := logging.Init(level, false)
 	if err != nil {
 		return err
 	} else {
@@ -80,9 +71,10 @@ func run(*cobra.Command, []string) error {
 		zap.L().Warn("failed to initialize OUI database; manufacturer lookups will be disabled", zap.Error(err))
 	}
 
-	tui := ui.NewApp(cfg, ouiDB, version.Version)
-	if err := tui.Run(); err != nil {
-		zap.L().Error("tui run failed", zap.Error(err))
+	app := ui.NewApp(cfg, ouiDB, version.Version)
+
+	if err := app.Run(); err != nil {
+		zap.L().Error("app run failed", zap.Error(err))
 		return err
 	}
 

@@ -8,18 +8,21 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/ramonvermeulen/whosthere/internal/discovery"
+	"github.com/ramonvermeulen/whosthere/internal/core/discovery"
+	"github.com/ramonvermeulen/whosthere/internal/core/state"
+	"github.com/ramonvermeulen/whosthere/internal/ui/events"
 	"github.com/ramonvermeulen/whosthere/internal/ui/theme"
+	"github.com/ramonvermeulen/whosthere/internal/ui/utils"
 	"github.com/rivo/tview"
-	"go.uber.org/zap"
 )
+
+var _ UIComponent = &DeviceTable{}
 
 // DeviceTable wraps a tview.Table for displaying discovered devices.
 type DeviceTable struct {
 	*tview.Table
-	devices       map[string]discovery.Device
-	filterPattern string
-	filterRE      *regexp.Regexp
+	devices  []discovery.Device
+	filterRE *regexp.Regexp
 
 	// live search state
 	searching   bool
@@ -27,9 +30,11 @@ type DeviceTable struct {
 	filterError bool
 
 	onSearchStatus func(SearchStatus)
+	emit           func(events.Event)
 }
 
 // SearchStatus describes the current regex search UI state.
+// TODO(ramon) rewrite to also be more compliant with AppState driven / elm architecture
 type SearchStatus struct {
 	Showing bool        // whether the search bar should be shown
 	Text    string      // text to render in the search bar
@@ -39,22 +44,20 @@ type SearchStatus struct {
 	Error   bool        // whether the current input is invalid
 }
 
-func NewDeviceTable() *DeviceTable {
-	t := &DeviceTable{Table: tview.NewTable(), devices: map[string]discovery.Device{}}
+func NewDeviceTable(emit func(events.Event)) *DeviceTable {
+	t := &DeviceTable{Table: tview.NewTable(), devices: []discovery.Device{}, emit: emit}
 	t.
 		SetBorder(true).
-		SetTitle("Devices").
+		SetTitle(" Devices ").
 		SetTitleColor(tview.Styles.TitleColor).
 		SetBorderColor(tview.Styles.BorderColor).
 		SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
 
 	t.SetFixed(1, 0)
 	t.SetSelectable(true, false)
-	t.Select(0, 0)
 
 	theme.RegisterPrimitive(t)
 
-	t.refresh()
 	return t
 }
 
@@ -79,6 +82,7 @@ func (dt *DeviceTable) handleSearchKey(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case tcell.KeyEsc:
 		dt.searching = false
+		dt.applySearch("")
 		return nil
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if dt.searchInput != "" {
@@ -104,20 +108,20 @@ func (dt *DeviceTable) handleSearchKey(ev *tcell.EventKey) *tcell.EventKey {
 func (dt *DeviceTable) handleNormalKey(ev *tcell.EventKey) *tcell.EventKey {
 	switch {
 	case ev.Key() == tcell.KeyEsc:
-		if dt.filterPattern != "" {
-			_ = dt.SetFilter("")
+		if dt.filterRE != nil {
+			dt.applySearch("")
 			return nil
 		}
 		return ev
 	case ev.Rune() == '/':
 		dt.searching = true
-		if dt.filterPattern != "" {
-			dt.searchInput = dt.filterPattern
+		if dt.filterRE != nil {
+			dt.searchInput = dt.filterRE.String()
 		} else {
 			dt.searchInput = ""
 		}
 		dt.filterError = false
-		dt.emitStatus()
+		dt.emitStatusWith(dt.searchInput)
 		return nil
 	case ev.Rune() == 'g':
 		dt.SelectFirst()
@@ -137,85 +141,49 @@ func (dt *DeviceTable) OnSearchStatus(cb func(SearchStatus)) { dt.onSearchStatus
 func (dt *DeviceTable) SetFilter(pattern string) error {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		dt.filterPattern = ""
 		dt.filterRE = nil
 		dt.refresh()
-		dt.SelectFirst()
 		dt.filterError = false
-		dt.emitStatus()
+		dt.emitStatusWith(dt.searchInput)
 		return nil
 	}
 	re, err := regexp.Compile("(?i)" + pattern)
 	if err != nil {
 		dt.filterError = true
-		dt.emitStatus()
+		dt.emitStatusWith(dt.searchInput)
 		return err
 	}
-	dt.filterPattern = pattern
 	dt.filterRE = re
 	dt.filterError = false
 	dt.refresh()
-	dt.SelectFirst()
-	dt.emitStatus()
+	dt.emitStatusWith(dt.searchInput)
 	return nil
 }
-
-// FilterPattern returns the current filter pattern, if any.
-func (dt *DeviceTable) FilterPattern() string { return dt.filterPattern }
 
 // applySearch applies an incremental search pattern, keeping the previous filter on errors.
 func (dt *DeviceTable) applySearch(pattern string) {
 	pattern = strings.TrimSpace(pattern)
+	if dt.emit != nil {
+		dt.emit(events.FilterChanged{Pattern: pattern})
+	}
 	if pattern == "" {
 		dt.filterError = false
 		_ = dt.SetFilter("")
 		return
 	}
 	if err := dt.SetFilter(pattern); err != nil {
-		// Keep last good filter, only mark error state.
 		dt.filterError = true
 		dt.emitStatusWith(pattern)
 		return
 	}
 	dt.filterError = false
-	dt.emitStatus()
+	dt.emitStatusWith(dt.searchInput)
 }
 
-// Upsert merges device and refreshes table UI.
-func (dt *DeviceTable) Upsert(d *discovery.Device) {
-	key := ""
-	if d == nil || d.IP == nil {
-		zap.L().Debug("skipping device with no IP", zap.Any("device", d))
-		return
-	}
-	key = d.IP.String()
-	if key == "" {
-		zap.L().Debug("skipping device with empty IP", zap.Any("device", d))
-		return
-	}
-	if existing, ok := dt.devices[key]; ok {
-		existing.Merge(d)
-		dt.devices[key] = existing
-	} else {
-		dt.devices[key] = *d
-	}
-	dt.refresh()
-}
-
-// Refresh forces a full redraw; kept for external callers like MainPage.
-func (dt *DeviceTable) Refresh() { dt.refresh() }
-
-// ReplaceAll clears the table and replaces its contents with the
-// provided devices slice.
-func (dt *DeviceTable) ReplaceAll(list []discovery.Device) {
-	dt.devices = make(map[string]discovery.Device, len(list))
-	for _, d := range list {
-		if d.IP == nil || d.IP.String() == "" {
-			continue
-		}
-		dt.devices[d.IP.String()] = d
-	}
-	dt.refresh()
+// Render updates the table with the latest devices from state.
+func (dt *DeviceTable) Render(st state.ReadOnly) {
+	dt.devices = st.DevicesSnapshot()
+	_ = dt.SetFilter(st.FilterPattern())
 }
 
 // SelectedIP returns the IP for the currently selected row, if any.
@@ -258,7 +226,7 @@ func (dt *DeviceTable) buildRows() []tableRow {
 			hostname:     d.DisplayName,
 			mac:          d.MAC,
 			manufacturer: d.Manufacturer,
-			lastSeen:     fmtDuration(time.Since(d.LastSeen)),
+			lastSeen:     utils.FmtDuration(time.Since(d.LastSeen)),
 		}
 		if dt.filterRE != nil && !dt.rowMatches(&row) {
 			continue
@@ -270,13 +238,14 @@ func (dt *DeviceTable) buildRows() []tableRow {
 }
 
 func (dt *DeviceTable) refresh() {
+	selectedIP := dt.SelectedIP()
 	dt.Clear()
 	const maxColWidth = 30
 
 	headers := []string{"IP", "Display Name", "MAC", "Manufacturer", "Last Seen"}
 
 	for i, h := range headers {
-		text := truncate(h, maxColWidth)
+		text := utils.Truncate(h, maxColWidth)
 		dt.SetCell(0, i, tview.NewTableCell(text).
 			SetSelectable(false).
 			SetTextColor(tview.Styles.SecondaryTextColor).
@@ -285,14 +254,20 @@ func (dt *DeviceTable) refresh() {
 
 	rows := dt.buildRows()
 
+	title := fmt.Sprintf(" Devices (%v) ", len(rows))
+	if dt.filterRE != nil {
+		title += fmt.Sprintf(" [%s]<%s>[-] ", utils.ColorToHexTag(tview.Styles.SecondaryTextColor), dt.filterRE.String())
+	}
+	dt.SetTitle(title)
+
 	for rowIndex, rowData := range rows {
 		r := rowIndex + 1
 
-		ipText := truncate(rowData.ip, maxColWidth)
-		hostText := truncate(rowData.hostname, maxColWidth)
-		macText := truncate(rowData.mac, maxColWidth)
-		manuText := truncate(rowData.manufacturer, maxColWidth)
-		seenText := truncate(rowData.lastSeen, maxColWidth)
+		ipText := utils.Truncate(rowData.ip, maxColWidth)
+		hostText := utils.Truncate(rowData.hostname, maxColWidth)
+		macText := utils.Truncate(rowData.mac, maxColWidth)
+		manuText := utils.Truncate(rowData.manufacturer, maxColWidth)
+		seenText := utils.Truncate(rowData.lastSeen, maxColWidth)
 
 		dt.SetCell(r, 0, tview.NewTableCell(ipText).SetExpansion(1))
 		dt.SetCell(r, 1, tview.NewTableCell(hostText).SetExpansion(1))
@@ -300,17 +275,22 @@ func (dt *DeviceTable) refresh() {
 		dt.SetCell(r, 3, tview.NewTableCell(manuText).SetExpansion(1))
 		dt.SetCell(r, 4, tview.NewTableCell(seenText).SetExpansion(1))
 	}
-	// Ensure selection remains within bounds after filtering.
+	// Restore selection if possible, otherwise select first.
 	if dt.GetRowCount() > 1 {
-		row, _ := dt.GetSelection()
-		if row <= 0 || row >= dt.GetRowCount() {
+		selectedRow := -1
+		for i, row := range rows {
+			if utils.Truncate(row.ip, maxColWidth) == selectedIP {
+				selectedRow = i + 1 // +1 for header
+				break
+			}
+		}
+		if selectedRow > 0 && selectedRow < dt.GetRowCount() {
+			dt.Select(selectedRow, 0)
+		} else {
 			dt.Select(1, 0)
 		}
 	}
 }
-
-// emitStatus reports the current search status to any subscriber.
-func (dt *DeviceTable) emitStatus() { dt.emitStatusWith(dt.searchInput) }
 
 func (dt *DeviceTable) emitStatusWith(input string) {
 	if dt.onSearchStatus == nil {
@@ -319,10 +299,13 @@ func (dt *DeviceTable) emitStatusWith(input string) {
 
 	status := SearchStatus{
 		Showing: dt.searching,
-		Active:  dt.filterPattern != "",
-		Filter:  dt.filterPattern,
+		Active:  dt.filterRE != nil,
 		Error:   dt.filterError,
 		Color:   tview.Styles.PrimaryTextColor,
+	}
+
+	if dt.filterRE != nil {
+		status.Filter = dt.filterRE.String()
 	}
 
 	if status.Error {
@@ -349,24 +332,4 @@ func (dt *DeviceTable) rowMatches(r *tableRow) bool {
 		dt.filterRE.MatchString(r.mac) ||
 		dt.filterRE.MatchString(r.manufacturer) ||
 		dt.filterRE.MatchString(r.lastSeen)
-}
-
-func fmtDuration(d time.Duration) string {
-	if d < time.Second {
-		return "<1s"
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d/time.Second))
-	}
-	return fmt.Sprintf("%dm", int(d/time.Minute))
-}
-
-func truncate(s string, maxLen int) string {
-	if maxLen <= 0 || len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 1 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-1] + "…"
 }
