@@ -13,7 +13,7 @@ import (
 
 const (
 	maxConcurrentTriggers = 200
-	triggerDeadline       = 1200 * time.Millisecond
+	triggerDeadline       = 300 * time.Millisecond
 	tcpDialTimeout        = 300 * time.Millisecond
 )
 
@@ -62,7 +62,6 @@ func NewSweeper(iface *discovery.InterfaceInfo, interval, debounce time.Duration
 	}
 }
 
-// todo get rid of the /24 assumption and use the network interface from iface
 func (s *Sweeper) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.started {
@@ -125,7 +124,7 @@ func (s *Sweeper) runSweep(ctx context.Context, subnet *net.IPNet, localIP net.I
 		return
 	}
 
-	s.logger.Info("Triggering ARP requests for subnet", zap.String("subnet", subnet.String()))
+	s.logger.Debug("Triggering ARP requests for subnet", zap.String("subnet", subnet.Mask.String()))
 	triggerSubnetSweep(ctx, ips)
 	s.logger.Debug("ARP triggering completed", zap.String("subnet", subnet.String()))
 }
@@ -135,6 +134,7 @@ func triggerSubnetSweep(ctx context.Context, ips []net.IP) {
 	sem := make(chan struct{}, maxConcurrentTriggers)
 
 	for _, ip := range ips {
+		zap.L().Debug("Triggering ARP for IP", zap.String("ip", ip.String()))
 		select {
 		case <-ctx.Done():
 			return

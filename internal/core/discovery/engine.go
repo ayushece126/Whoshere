@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"net"
 	"sync"
 	"time"
 
@@ -22,8 +21,6 @@ type Engine struct {
 	Scanners    []Scanner
 	Timeout     time.Duration
 	OUIRegistry *oui.Registry
-	OnSubnet    func(*net.IPNet)
-	Subnets     *SubnetRegistry
 }
 
 type EngineOption func(*Engine)
@@ -36,16 +33,10 @@ func WithOUIRegistry(r *oui.Registry) EngineOption {
 	return func(e *Engine) { e.OUIRegistry = r }
 }
 
-// WithSubnetHook allows callers to receive subnet hints for each device.
-func WithSubnetHook(f func(*net.IPNet)) EngineOption {
-	return func(e *Engine) { e.OnSubnet = f }
-}
-
 func NewEngine(scanners []Scanner, opts ...EngineOption) *Engine {
 	e := &Engine{
 		Scanners: scanners,
 		Timeout:  config.DefaultScanDuration,
-		Subnets:  NewSubnetRegistry(),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -76,7 +67,7 @@ func (e *Engine) fillManufacturerIfEmpty(d *Device) {
 }
 
 // Stream runs scanners and invokes onDevice for each incremental merged device observed.
-func (e *Engine) Stream(ctx context.Context, onDevice func(Device)) ([]Device, error) {
+func (e *Engine) Stream(ctx context.Context, onDevice func(*Device)) ([]Device, error) {
 	ctx, cancel := context.WithTimeout(ctx, e.Timeout)
 	defer cancel()
 
@@ -111,37 +102,30 @@ func (e *Engine) Stream(ctx context.Context, onDevice func(Device)) ([]Device, e
 				// channel closed, all scanners are done
 				return mapToSlice(devices), nil
 			}
-			e.handleDevice(d, devices, onDevice)
+			e.handleDevice(&d, devices, onDevice)
 		}
 	}
 }
 
 // handleDevice processes a discovered device, merging with existing or adding new.
-func (e *Engine) handleDevice(d Device, devices map[string]*Device, onDevice func(Device)) {
+func (e *Engine) handleDevice(d *Device, devices map[string]*Device, onDevice func(*Device)) {
 	if d.IP == nil || d.IP.String() == "" {
 		return
 	}
-	if e.OnSubnet != nil {
-		if sn := ipv4Subnet24(d.IP); sn != nil {
-			if e.Subnets == nil || e.Subnets.Add(sn) {
-				e.OnSubnet(sn)
-			}
-		}
-	}
 	key := d.IP.String()
 	if existing, found := devices[key]; found {
-		existing.Merge(&d)
+		existing.Merge(d)
 		e.fillManufacturerIfEmpty(existing)
 		if onDevice != nil {
-			onDevice(*existing)
+			onDevice(existing)
 		}
 	} else {
 		dev := d
 		if dev.FirstSeen.IsZero() {
 			dev.FirstSeen = time.Now()
 		}
-		e.fillManufacturerIfEmpty(&dev)
-		devices[key] = &dev
+		e.fillManufacturerIfEmpty(dev)
+		devices[key] = dev
 		if onDevice != nil {
 			onDevice(dev)
 		}
@@ -154,15 +138,4 @@ func mapToSlice(m map[string]*Device) []Device {
 		res = append(res, *v)
 	}
 	return res
-}
-
-func ipv4Subnet24(ip net.IP) *net.IPNet {
-	if ip == nil {
-		return nil
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// Convert to 24-bit subnet mask
-		return &net.IPNet{IP: ip4.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}
-	}
-	return nil
 }

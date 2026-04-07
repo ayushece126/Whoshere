@@ -6,11 +6,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/ramonvermeulen/whosthere/internal/core"
 	"github.com/ramonvermeulen/whosthere/internal/core/config"
 	"github.com/ramonvermeulen/whosthere/internal/core/discovery"
-	"github.com/ramonvermeulen/whosthere/internal/core/discovery/arp"
-	"github.com/ramonvermeulen/whosthere/internal/core/discovery/mdns"
-	"github.com/ramonvermeulen/whosthere/internal/core/discovery/ssdp"
 	"github.com/ramonvermeulen/whosthere/internal/core/oui"
 	"github.com/ramonvermeulen/whosthere/internal/core/state"
 	"github.com/ramonvermeulen/whosthere/internal/ui/events"
@@ -25,8 +23,6 @@ const (
 	refreshInterval = 1 * time.Second
 )
 
-// todo solve bug when you open ctrl + t too soon after starting app
-
 // App represents the main TUI application.
 type App struct {
 	*tview.Application
@@ -40,6 +36,7 @@ type App struct {
 	events        chan events.Event
 	emit          func(events.Event)
 	portScanner   *discovery.PortScanner
+	isReady       bool
 }
 
 func NewApp(cfg *config.Config, ouiDB *oui.Registry, version string) (*App, error) {
@@ -92,7 +89,10 @@ func (a *App) Run() error {
 			}()
 			time.Sleep(delay)
 			a.emit(events.NavigateTo{Route: routes.RouteDashboard})
+			a.isReady = true
 		}(a.cfg.Splash.Delay)
+	} else {
+		a.isReady = true
 	}
 
 	if a.engine != nil && a.cfg != nil {
@@ -131,30 +131,16 @@ func (a *App) setupEngine(cfg *config.Config, ouiDB *oui.Registry) error {
 
 	a.portScanner = discovery.NewPortScanner(100, iface)
 
-	sweeper := arp.NewSweeper(iface, 5*time.Minute, time.Minute)
-	var scanners []discovery.Scanner
-
-	if cfg.Scanners.SSDP.Enabled {
-		scanners = append(scanners, ssdp.NewScanner(iface))
-	}
-	if cfg.Scanners.ARP.Enabled {
-		scanners = append(scanners, arp.NewScanner(iface, sweeper))
-	}
-	if cfg.Scanners.MDNS.Enabled {
-		scanners = append(scanners, mdns.NewScanner(iface))
-	}
-
-	a.engine = discovery.NewEngine(
-		scanners,
-		discovery.WithTimeout(cfg.ScanDuration),
-		discovery.WithOUIRegistry(ouiDB),
-		discovery.WithSubnetHook(sweeper.Trigger),
-	)
+	a.engine = core.BuildEngine(iface, ouiDB, core.GetEnabledFromCfg(cfg), cfg.ScanDuration)
 
 	return nil
 }
 
 func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
+	// if the app isn't fully started, but it can already listen to key events this can cause a UI bug
+	if !a.isReady {
+		return event
+	}
 	switch event.Key() {
 	case tcell.KeyCtrlT:
 		a.emit(events.NavigateTo{Route: routes.RouteThemePicker, Overlay: true})
@@ -210,8 +196,8 @@ func (a *App) performScan() {
 	a.emit(events.DiscoveryStarted{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanDuration)
-	_, _ = a.engine.Stream(ctx, func(d discovery.Device) {
-		a.state.UpsertDevice(&d)
+	_, _ = a.engine.Stream(ctx, func(d *discovery.Device) {
+		a.state.UpsertDevice(d)
 	})
 	cancel()
 
