@@ -1,6 +1,7 @@
 package state
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/ramonvermeulen/whosthere/internal/core/config"
@@ -20,6 +21,7 @@ type ReadOnly interface {
 	IsDiscovering() bool
 	IsPortscanning() bool
 	Config() config.Config
+	GetDevice(ip string) (discovery.Device, bool)
 }
 
 // AppState holds application-level state shared across views and
@@ -29,7 +31,6 @@ type AppState struct {
 
 	devices        map[string]discovery.Device
 	selectedIP     string
-	currentTheme   string
 	previousTheme  string
 	version        string
 	filterPattern  string
@@ -49,7 +50,6 @@ func NewAppState(cfg *config.Config, version string) *AppState {
 	if cfg != nil && cfg.Theme.Name != "" {
 		themeName = cfg.Theme.Name
 	}
-	s.currentTheme = themeName
 	s.previousTheme = themeName
 
 	return s
@@ -85,6 +85,7 @@ func (s *AppState) DevicesSnapshot() []discovery.Device {
 	for _, d := range s.devices {
 		out = append(out, d)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IP.String() < out[j].IP.String() })
 	return out
 }
 
@@ -118,14 +119,14 @@ func (s *AppState) SelectedIP() string {
 func (s *AppState) SetCurrentTheme(theme string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.currentTheme = theme
+	s.cfg.Theme.Name = theme
 }
 
 // CurrentTheme returns the current theme.
 func (s *AppState) CurrentTheme() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.currentTheme
+	return s.cfg.Theme.Name
 }
 
 // PreviousTheme returns the previous theme.
@@ -208,4 +209,13 @@ func (s *AppState) Config() config.Config {
 // ReadOnly returns a read-only interface to the state.
 func (s *AppState) ReadOnly() ReadOnly {
 	return s
+}
+
+// GetDevice retrieves a device by IP address.
+func (s *AppState) GetDevice(ip string) (discovery.Device, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	device, ok := s.devices[ip]
+	return device, ok
 }
