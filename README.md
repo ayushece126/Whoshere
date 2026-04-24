@@ -3,18 +3,20 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/ramonvermeulen/whosthere)](https://goreportcard.com/report/github.com/ramonvermeulen/whosthere)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/ramonvermeulen/whosthere)](https://go.dev/doc/devel/release)
 [![License](https://img.shields.io/github/license/ramonvermeulen/whosthere)](LICENSE)
-[![GitHub Repo stars](https://img.shields.io/github/stars/ramonvermeulen/whosthere)](https://github.com/ramonvermeulen/whosthere)
 [![GitHub Release](https://img.shields.io/github/v/release/ramonvermeulen/whosthere)](https://github.com/ramonvermeulen/whosthere/releases)
+[![GitHub Repo stars](https://img.shields.io/github/stars/ramonvermeulen/whosthere)](https://github.com/ramonvermeulen/whosthere)
 
-Local area network discovery tool with a modern Terminal User Interface (TUI) written in Go.
+Local Area Network discovery tool with a modern Terminal User Interface (TUI) written in Go. 
 Discover, explore, and understand your LAN in an intuitive way.
 
-Whosthere performs **privilege-less, concurrent scans** using [**mDNS**](https://en.wikipedia.org/wiki/Multicast_DNS) and
-[**SSDP**](https://en.wikipedia.org/wiki/Simple_Service_Discovery_Protocol) scanners. Aside from that it sweeps
-the local subnet with TCP/UDP connections and reads out the [**ARP Cache**](https://en.wikipedia.org/wiki/ARP_cache) to
-quickly find and identify devices on your Local Area Network. This is a technique that under-the-hood triggers ARP
-requests to all IP addresses in the network interface it's subnet, without requiring elevated privileges.
-All discovered devices are enhanced with [**OUI**](https://standards-oui.ieee.org/) lookup to show manufacturers if available.
+Whosthere performs **unprivileged, concurrent scans** using [**mDNS**](https://en.wikipedia.org/wiki/Multicast_DNS)
+and [**SSDP**](https://en.wikipedia.org/wiki/Simple_Service_Discovery_Protocol) scanners. Additionally, it sweeps the 
+local subnet by attempting TCP/UDP connections to trigger ARP resolution, then reads the 
+[**ARP cache**](https://en.wikipedia.org/wiki/Address_Resolution_Protocol) to identify devices on your Local Area Network. 
+This technique populates the ARP cache without requiring elevated privileges. All discovered devices are enhanced with 
+[**OUI**](https://standards-oui.ieee.org/) lookups to display manufacturers when available.
+
+Whosthere provides a friendly, intuitive way to answer the question every network administrator asks: "Who's there on my network?"
 
 ![demo gif](.github/assets/demo.gif)
 
@@ -160,17 +162,27 @@ scanners:
 # Port scanner configuration
 port_scanner:
   timeout: 5s
-    # List of TCP ports to scan on discovered devices
+  # List of TCP ports to scan on discovered devices
   tcp: [21, 22, 23, 25, 80, 110, 135, 139, 143, 389, 443, 445, 993, 995, 1433, 1521, 3306, 3389, 5432, 5900, 8080, 8443, 9000, 9090, 9200, 9300, 10000, 27017]
 
 # Uncomment the next line to configure a specific network interface - uses OS default if not set
 # network_interface: lo0
 ```
 
+## Daemon mode HTTP API
+
+When running Whosthere in daemon mode, it exposes an very simplistic HTTP API with the following endpoints:
+
+| Method | Endpoint       | Description                        |
+| ------ |----------------| ---------------------------------- |
+| GET    | `/devices`     | Get list of all discovered devices |
+| GET    | `/device/{ip}` | Get details of a specific device   |
+| GET    | `/health`      | Health check                       |
+
 ## Themes
 
 Theme can be configured via the configuration file, or at runtime via the `CTRL+t` key binding.
-A complete list of available themes can be found [**here**](<>), feel free to open a PR to add your own theme!
+A complete list of available themes can be found [**here**](https://github.com/ramonvermeulen/whosthere/blob/main/internal/ui/theme/theme.go), feel free to open a PR to add your own theme!
 
 Example of theme configuration:
 
@@ -189,6 +201,17 @@ Logs are written to the application's state directory:
 - `~/.local/state/whosthere/app.log` (otherwise)
 
 When not running in TUI mode, logs are also output to the console.
+
+## Known Issues
+For clipboard functionality to work:
+
+**Runtime requirements:**
+- **Linux (X11)**: X11 client library (e.g., `libx11-6` on Ubuntu, `libX11` on Fedora/Arch, often pre-installed).
+- **Linux (Wayland)**: Not natively supported. May require XWayland.
+- **macOS/Windows**: No dependencies.
+
+**Build requirements** (when compiling from source):
+- Linux: X11 development package (`libx11-dev`, `libX11-devel`, or `libx11`)
 
 ## Disclaimer
 
